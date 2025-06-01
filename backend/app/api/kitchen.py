@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.core.database import get_db
+from app.core.database import get_async_session
 from app.models.order import Order, OrderItem, OrderStatus
 from app.models.menu_item import MenuItem
 from app.schemas.order import OrderOut, OrderItemOut
@@ -9,7 +9,7 @@ from app.schemas.order import OrderOut, OrderItemOut
 router = APIRouter(prefix="/kitchen", tags=["kitchen"])
 
 @router.get("/queue", response_model=list[OrderOut])
-async def get_kitchen_queue(db: AsyncSession = Depends(get_db)):
+async def get_kitchen_queue(db: AsyncSession = Depends(get_async_session)):
     # 1. RECEIVED durumundaki siparişleri getir
     order_stmt = select(Order).where(Order.status == OrderStatus.RECEIVED)
     orders_result = await db.execute(order_stmt)

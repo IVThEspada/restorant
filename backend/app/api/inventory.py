@@ -1,18 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.core.database import get_db
+from app.core.database import get_async_session  # düzeltildi
 from app.models.ingredient import Ingredient
 from app.dependencies.auth import role_required
-from fastapi import HTTPException
-from app.schemas.inventory import LowStockItem, IngredientUpdate
-from app.schemas.inventory import IngredientOut
-
+from app.schemas.inventory import LowStockItem, IngredientUpdate, IngredientOut
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 @router.get("/low-stock", response_model=list[LowStockItem], dependencies=[Depends(role_required(["MANAGER", "KITCHEN"]))])
-async def get_low_stock_items(db: AsyncSession = Depends(get_db)):
+async def get_low_stock_items(db: AsyncSession = Depends(get_async_session)):
     result = await db.execute(
         select(Ingredient).where(Ingredient.stock_quantity < Ingredient.low_stock_threshold)
     )
@@ -31,7 +28,7 @@ async def get_low_stock_items(db: AsyncSession = Depends(get_db)):
 async def update_ingredient(
     ingredient_id: int,
     payload: IngredientUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ):
     result = await db.execute(select(Ingredient).where(Ingredient.id == ingredient_id))
     ingredient = result.scalar_one_or_none()
@@ -47,14 +44,14 @@ async def update_ingredient(
     return ingredient
 
 @router.get("/", response_model=list[IngredientOut], dependencies=[Depends(role_required(["MANAGER", "KITCHEN"]))])
-async def get_all_ingredients(db: AsyncSession = Depends(get_db)):
+async def get_all_ingredients(db: AsyncSession = Depends(get_async_session)):
     result = await db.execute(select(Ingredient))
     return result.scalars().all()
 
 @router.get("/{ingredient_id}", response_model=IngredientOut, dependencies=[Depends(role_required(["MANAGER", "KITCHEN"]))])
 async def get_ingredient_by_id(
     ingredient_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ):
     result = await db.execute(select(Ingredient).where(Ingredient.id == ingredient_id))
     ingredient = result.scalar_one_or_none()

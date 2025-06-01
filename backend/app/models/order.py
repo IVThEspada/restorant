@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum as PyEnum
 from app.core.database import Base
+from sqlalchemy import Boolean
 
 
 class OrderStatus(PyEnum):
@@ -19,8 +20,9 @@ class Order(Base):
     table_id = Column(Integer, nullable=False)
     status = Column(Enum(OrderStatus), default=OrderStatus.RECEIVED)
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    customer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    is_paid = Column(Boolean, default=False)  # 🚀 Bunu ekle !!!
 
 
 class OrderItem(Base):

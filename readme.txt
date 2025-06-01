@@ -17,10 +17,16 @@ uvicorn app.main:app --reload
 # Sanal ortam oluştur
 python -m venv venv
 # Aktifleştir
-.\venv\Scripts\activate
+# .\venv\Scripts\activate
+source venv/bin/activate
+source .\venv\Scripts\activate
 
 # Kütüphaneleri yükle
 pip install -r requirements.txt
 
 # Uygulamayı başlat
+cd backend
 uvicorn app.main:app --reload
+
+sudo systemctl start postgresql
+sudo -u postgres psql -d restaurant
