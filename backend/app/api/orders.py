@@ -14,6 +14,7 @@ from app.dependencies.auth import get_current_user, role_required
 from app.models.user import User
 from app.models.ingredient import Ingredient
 from app.models.menu_item_ingredient import MenuItemIngredient
+from app.services.menu_service import check_and_update_menu_item_availability # Yeni import
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -48,41 +49,48 @@ async def place_order(
         if not mi.is_available:
             raise HTTPException(status_code=400, detail=f"'{mi.name}' ürünü şu anda siparişe kapalı.")
 
-    # ✅ Yeni sipariş oluştur
-    order = Order(
-        table_id=payload.table_id,
-        customer_id=current_user.id
-    )
-
-    db.add(order)
-    await db.flush()
-
-    # Sipariş ürünleri ekle
-    for item in payload.items:
-        db.add(OrderItem(
-            order_id=order.id,
-            menu_item_id=item.menu_item_id,
-            quantity=item.quantity,
-            note=item.note
-        ))
-
-    # Stok güncelle
-    for item in payload.items:
-        ingredient_result = await db.execute(
-            select(MenuItemIngredient).where(MenuItemIngredient.menu_item_id == item.menu_item_id)
+        # ✅ Yeni sipariş oluştur
+        order = Order(
+            table_id=payload.table_id,
+            customer_id=current_user.id
         )
-        used_ingredients = ingredient_result.scalars().all()
+        db.add(order)
+        await db.flush()  # order.id'ye erişmek için flush
 
-        for usage in used_ingredients:
+        # Sipariş ürünleri ekle
+        for item in payload.items:
+            db.add(OrderItem(
+                order_id=order.id,
+                menu_item_id=item.menu_item_id,
+                quantity=item.quantity,
+                note=item.note
+            ))
+
+        # Stok güncelle ve menü öğesi uygunluğunu kontrol et
+        menu_items_to_check_availability = set()  # Tekrar eden kontrolleri önlemek için set
+        for item in payload.items:
             ingredient_result = await db.execute(
-                select(Ingredient).where(Ingredient.id == usage.ingredient_id)
+                select(MenuItemIngredient).where(MenuItemIngredient.menu_item_id == item.menu_item_id)
             )
-            ingredient = ingredient_result.scalar_one_or_none()
-            if ingredient:
-                ingredient.stock_quantity -= usage.amount_used * item.quantity
+            used_ingredients = ingredient_result.scalars().all()
 
-    await db.commit()
-    await db.refresh(order)
+            for usage in used_ingredients:
+                ingredient_result = await db.execute(
+                    select(Ingredient).where(Ingredient.id == usage.ingredient_id)
+                )
+                ingredient = ingredient_result.scalar_one_or_none()
+                if ingredient:
+                    ingredient.stock_quantity -= usage.amount_used * item.quantity
+                    db.add(ingredient)  # Değişikliği session'a ekle
+
+            menu_items_to_check_availability.add(item.menu_item_id)  # Bu menü öğesinin stok durumunu kontrol etmeliyiz
+
+        # Tüm stok güncellemeleri yapıldıktan sonra menü öğelerinin uygunluğunu kontrol et
+        for menu_item_id in menu_items_to_check_availability:
+            await check_and_update_menu_item_availability(db, menu_item_id)
+
+        await db.commit()  # Tüm değişiklikleri (order, order_items, ingredient stock, menu_item availability) tek bir işlemde commit et
+        await db.refresh(order)
 
     # Sipariş ürünlerini getir
     item_stmt = select(OrderItem).where(OrderItem.order_id == order.id)

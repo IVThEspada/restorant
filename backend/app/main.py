@@ -47,9 +47,10 @@ def custom_openapi():
             "bearerFormat": "JWT"
         }
     }
-    for path in openapi_schema["paths"].values():
-        for method in path.values():
-            method["security"] = [{"bearerAuth": []}]
+    # AŞAĞIDAKİ DÖNGÜYÜ KALDIRIN!
+    # for path in openapi_schema["paths"].values():
+    #     for method in path.values():
+    #         method["security"] = [{"bearerAuth": []}]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 

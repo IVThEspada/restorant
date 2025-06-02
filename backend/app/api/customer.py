@@ -1,12 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from app.models.table import DiningTable, TableStatus
 from app.core.database import get_async_session
 from app.dependencies.auth import get_current_user
 from app.models.user import User
-from app.models.order import Order, OrderStatus
-from app.models.table import DiningTable
+from app.models.order import Order, OrderItem, OrderStatus # OrderItem'ı da ekledik
+from app.models.menu_item import MenuItem # MenuItem'ı da ekledik
+
+from pydantic import BaseModel
+
+class MessageResponse(BaseModel):
+    message: str
+
 
 router = APIRouter(prefix="/customer", tags=["Customer"])
 
@@ -73,18 +79,52 @@ async def get_my_orders(
     if not table:
         return {"table_number": None, "orders": []}
 
-    # O masadaki siparişleri getir
+    # O masadaki kullanıcının SADECE ÖDENMEMİŞ siparişlerini getir
     orders_result = await session.execute(
-        select(Order).where(Order.table_id == table.id)
+        select(Order)
+        .where(
+            Order.table_id == table.id,
+            Order.customer_id == current_user.id, # Kendi siparişlerini alsın
+            Order.is_paid == False # Sadece ödenmemiş siparişleri filtrele
+        )
+        .order_by(Order.created_at)
     )
     orders = orders_result.scalars().all()
 
+    # Siparişler ve detaylarını hazırlama
+    formatted_orders = []
+    for order in orders:
+        # Siparişin kalemlerini çek
+        order_items_result = await session.execute(
+            select(OrderItem, MenuItem.name, MenuItem.price)
+            .join(MenuItem, OrderItem.menu_item_id == MenuItem.id)
+            .where(OrderItem.order_id == order.id)
+        )
+        items = order_items_result.all()
+
+        # Her bir OrderItem için toplam tutarı hesapla
+        total_order_amount = sum((item_obj.quantity * menu_item_price) for item_obj, menu_item_name, menu_item_price in items)
+
+        formatted_orders.append({
+            "id": order.id,
+            "status": order.status.value,
+            "is_paid": order.is_paid,
+            "total_amount": total_order_amount,
+            "items": [
+                {
+                    "id": item_obj.id,
+                    "menu_item_id": item_obj.menu_item_id,
+                    "quantity": item_obj.quantity,
+                    "note": item_obj.note,
+                    "name": menu_item_name
+                }
+                for item_obj, menu_item_name, menu_item_price in items
+            ]
+        })
+
     return {
         "table_number": table.number,
-        "orders": [
-            {"order_id": o.id, "status": o.status.value, "is_paid": o.is_paid}
-            for o in orders
-        ]
+        "orders": formatted_orders
     }
 
 @router.post("/leave")
@@ -119,3 +159,57 @@ async def leave_table(
     await session.refresh(table)
 
     return {"message": f"{table.number} numaralı masadan kalktınız."}
+
+
+
+### **Yeni Ödeme Endpoint'i: `/customer/pay-bill`**
+@router.post("/pay-bill", response_model=MessageResponse)
+async def pay_customer_bill(
+    session: AsyncSession = Depends(get_async_session), # AsyncSession olarak güncelledik
+    current_user: User = Depends(get_current_user)
+):
+    # CUSTOMER rolü kontrolü
+    if current_user.role.value != "CUSTOMER": # Enum değeri olduğu için .value kullandık
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sadece müşteriler bu işlemi yapabilir."
+        )
+
+    # Kullanıcının oturduğu masayı bul
+    table_result = await session.execute(
+        select(DiningTable).where(DiningTable.current_user_id == current_user.id)
+    )
+    table = table_result.scalar_one_or_none()
+
+    if not table:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ödeme yapmak için önce bir masada olmanız gerekmektedir."
+        )
+
+    # O masadaki kullanıcının ödenmemiş siparişlerini çek
+    unpaid_orders_result = await session.execute(
+        select(Order).where(
+            Order.table_id == table.id,
+            # HATA BURADAYDI! Order.user_id yerine Order.customer_id kullanmalıyız.
+            Order.customer_id == current_user.id, # DÜZELTME BURADA
+            Order.is_paid == False
+        )
+    )
+    unpaid_orders = unpaid_orders_result.scalars().all()
+
+    if not unpaid_orders:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Ödenecek aktif bir siparişiniz bulunmamaktadır."
+        )
+
+    # Tüm ödenmemiş siparişleri ödendi olarak işaretle
+    for order in unpaid_orders:
+        order.is_paid = True
+        session.add(order) # Değişikliği session'a ekle
+
+    await session.commit() # Commit et
+    # await session.refresh(order) # refresh tek bir obje için geçerli, for döngüsünde kullanmaya gerek yok
+
+    return {"message": "Hesap başarıyla ödendi!"}
